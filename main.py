@@ -1,216 +1,119 @@
-""" Batuhan Erden S004345 Department of Computer Science """
-
-
-from glob import glob
+#DO NOT IMPORT ANY OTHER LIBRARY.
 import numpy as np
+import glob
 import cv2
+import os
+from matplotlib import pyplot as plt
 
+import SudokuRecognizer as sr
+from mnist_web import mnist
 
-PATH_TO_IMAGES_FOLDER = "./images/"
 
+# Define your functions here if required :
+def get_nearest_sample_index(sample, train_data):
+    # OpenCV's Support Vector Machine
+    dist_matrix = sample - train_data
+    dist_square = dist_matrix ** 2
+    dist_sums = dist_square.sum(axis=1)
+    distance_vector = np.sqrt(dist_sums)
 
-class Kernel:
+    return distance_vector.argmin()
 
-    def __init__(self, image, block_size=11):
-        self.image = image
-        self.block_size = block_size
-        self.blur_kernel_size, self.morphology_kernel = None, None
 
-        self.calculate_parameters()
+def get_label(ind):
+    l = 0
+    for i in ind:
+        l += 1
+        if i:
+            return l
 
-    def calculate_parameters(self):
-        blurriness_level = self.get_blurriness_level(self.image)
 
-        self.blur_kernel_size = (5 + blurriness_level, 5 + blurriness_level) \
-            if not blurriness_level % 2 \
-            else (4 + blurriness_level, 4 + blurriness_level)
-        self.morphology_kernel = np.ones((3 + blurriness_level, 3 + blurriness_level), np.uint8)
+# Set dataset path before start example  '/Home/sudoku_dataset-master' :
+sudoku_dataset_dir = '/Users/barisozcan/Documents/CS423 Computer Vision/sudoku_dataset-master'
+MNIST_dataset_dir = "/Users/barisozcan/Documents/MNIST_dataset"
 
-    @staticmethod
-    def get_blurriness_level(image):
-        blurriness_level = 0
-        variance = cv2.Laplacian(image, cv2.CV_64F).var()
+# Load MNIST Dataset:
+MNIST_dataset_dir = "./MNIST_dataset"
+train_images, train_labels, test_images, test_labels = mnist(path="./MNIST_dataset")
 
-        for threshold in [120, 100, 60, 15, 10]:
-            if variance <= threshold:
-                blurriness_level += 1
-            else:
-                break
+# Apply PCA to MNIST
 
-        return blurriness_level
+print(len(test_images))
+eigenvectors = sr.mnistPCA(train_images)
 
-    def get_image_filtered(self, image):
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)  # Make the image gray
-        blurred = cv2.GaussianBlur(gray, self.blur_kernel_size, 0)  # Apply Gaussian Blur on the image
-        thresh = cv2.adaptiveThreshold(blurred, 255, 1, 1, self.block_size, 2)  # Threshold the image
-        morphology = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, self.morphology_kernel)  # Apply morphology operations
+train_data = np.dot(train_images, eigenvectors)
+#train_images = (train_images - np.mean(train_images, axis=0))
+sample_data = np.dot(test_images, eigenvectors)
 
-        return morphology
+found = 0
+for i in range(len(test_images)):
+    sample = sample_data[i]
+    delta = get_nearest_sample_index(sample, train_data)
 
+    train_label = get_label(train_labels[delta])
+    sample_label = get_label(test_labels[i])
 
-class SudokuDetector:
+    if train_label == sample_label:
+        found += 1
 
-    def __init__(self, image):
-        self.image = image
 
-    def get_sudoku_frame(self, rectangles, min_rectangle_count=50):
-        possible_sudoku_frames = []
+accuracy = found / len(test_images)
+print("Accuracy: {}%".format(accuracy))
 
-        for i in range(len(rectangles)):
-            (X1, Y1), (X2, Y2) = self.get_points_of_rectangle(rectangles[i])
-            rectangle_count = 0
 
-            for j in range(len(rectangles)):
-                (x1, y1), (x2, y2) = self.get_points_of_rectangle(rectangles[j])
 
-                if x1 >= X1 and y1 >= Y1 and x2 <= X2 and y2 <= Y2:
-                    rectangle_count += 1
+# use sr.mnistPCA() that you applier for transformation
+# classify test set with any method you choose (hint simplest one : nearest neighbour)
+# report the outcome
+# Calculate confusion matrix, false postivies/negatives.
+# print(reporting_results)
 
-            if rectangle_count >= min_rectangle_count:
-                possible_sudoku_frames.append((rectangles[i], rectangle_count))
 
-        if len(possible_sudoku_frames) == 0:
-            return []
 
-        return sorted(possible_sudoku_frames, key=lambda x: x[1])[0][0]
+image_dirs = sudoku_dataset_dir + '/images/image*.jpg'
+data_dirs = sudoku_dataset_dir + '/images/image*.dat'
+IMAGE_DIRS = glob.glob(image_dirs)
+DATA_DIRS = glob.glob(data_dirs)
+len(IMAGE_DIRS)
 
-    @staticmethod
-    def get_points_of_rectangle(rectangle):
-        (x, y, w, h) = cv2.boundingRect(rectangle)
-        return (x, y), (x + w, y + h)
 
+#Define your variables etc. outside for loop here:
 
-class RectangleDetector(SudokuDetector):
+# Accumulate accuracy for average accuracy calculation.
+cumulativeAcc = 0
 
-    def __init__(self, image):
-        SudokuDetector.__init__(self, image)
+## Loop over all images
+for img_dir, data_dir in zip(IMAGE_DIRS, DATA_DIRS):
 
-        self.kernel = Kernel(image)
-        self.min_area = self.get_min_area()
+    #Define your variables etc.:
+    image_name = os.path.basename(img_dir)
+    data = np.genfromtxt(data_dir, skip_header=2, dtype=int, delimiter=' ')
+    img = cv2.imread(img_dir)
 
-    def get_min_area(self):
-        (h, w) = self.image.shape[:2]
-        return (w * h) / 500
 
-    def draw_rectangles(self):
-        rectangles = self.get_rectangles_from_image()
+    # detect sudoku puzzle:
+    boundingBox = sr.detectSudoku(img)
 
-        if len(rectangles) == 0:
-            return
+    # Uncomment this section if you would like to see resulting bounding boxes.
+    # cv2.rectangle(img, boundingBox[0], boundingBox[1], (0, 0, 255), 2)
+    # cv2.imshow(image_name, img)
+    # cv2.waitKey()
 
-        for rectangle in rectangles[1:len(rectangles)]:
-            self.draw_rectangle(rectangle, (255, 0, 0))
+    # Recognize digits in sudoku puzzle :
+    sudokuArray = sr.RecognizeSudoku(img)
 
-        self.draw_rectangle(rectangles[0], (0, 0, 255))
+    # Evaluate Result for current image :
 
-    def get_rectangles_from_image(self):
-        contours = self.find_contours_in_image()
-        rectangles = self.get_rectangles_from_contours(contours)
+    detectionAccuracyArray = data == sudokuArray
+    accPercentage = np.sum(detectionAccuracyArray)/detectionAccuracyArray.size
+    cumulativeAcc = cumulativeAcc + accPercentage
+    print(image_name + " accuracy : " + accPercentage.__str__() + "%")
 
-        sudoku_frame = self.get_sudoku_frame(rectangles)
+# Calculate confusion matrix, false postivies/negatives for Sudoku dataset here.
 
-        if len(sudoku_frame) == 0:
-            if self.kernel.block_size <= 101:
-                self.kernel.block_size += 10
-                return self.get_rectangles_from_image()
-            else:
-                return []
 
-        return [sudoku_frame] + rectangles
 
-    def get_rectangles_from_contours(self, contours, e=0.04):
-        rectangles = []
-
-        for contour in contours:
-            area = cv2.contourArea(contour)
-
-            if area >= self.min_area:
-                epsilon = e * cv2.arcLength(contour, True)
-                approx = cv2.approxPolyDP(contour, epsilon, True)
-
-                if len(approx) == 4:  # It's a rectangle
-                    rectangles.append(contour)
-
-        return rectangles
-
-    def find_contours_in_image(self, mode=cv2.RETR_TREE, method=cv2.CHAIN_APPROX_SIMPLE):
-        image_filtered = self.kernel.get_image_filtered(self.image)
-        _, contours, _ = cv2.findContours(image_filtered, mode, method)  # Find the contours in the image
-
-        return contours
-
-    def draw_rectangle(self, rectangle, color, thickness=3):
-        (x, y, w, h) = cv2.boundingRect(rectangle)
-        cv2.rectangle(self.image, (x, y), (x + w, y + h), color, thickness)
-
-
-def read_images_from():
-    images = []
-    print("Progress Report: Reading images from %s" % PATH_TO_IMAGES_FOLDER)
-
-    for file_name in glob(PATH_TO_IMAGES_FOLDER + "/*"):
-        if "data" not in file_name and ".py" not in file_name:
-            images.append((file_name, cv2.imread(file_name)))
-
-    if len(images) == 0:
-        print("No images found! Good Bye..")
-        exit(0)
-
-    print("Progress Report: %d images are read!" % len(images))
-    return images
-
-
-def get_images_processed(images):
-    images_processed = []
-    print("Progress Report: Processing those images..")
-
-    for name, image in images:
-        rectangle_detector = RectangleDetector(image)
-        rectangle_detector.draw_rectangles()
-
-        images_processed.append((name, rectangle_detector.image))
-
-    print("Progress Report: Images are processed!")
-    return images_processed
-
-
-def show_images_processed(images_processed):
-    print("Progress Report: Showing images..")
-
-    for name, image_processed in images_processed:
-        cv2.imshow(name, get_image_resized(image_processed))
-
-        if cv2.waitKey(0) & 0xff == 27:
-            print("Progress Report: You've pressed ESC Key, Good Bye!")
-
-            cv2.destroyAllWindows()
-            exit(0)
-
-        cv2.destroyAllWindows()
-
-    print("Progress Report: All images are shown, Good Bye!")
-
-
-def get_image_resized(image, max_size=600, inverse_scale=0.05):
-    while True:
-        (h, w) = image.shape[:2]
-
-        if h <= max_size and w <= max_size:
-            break
-
-        scale = 1 - inverse_scale
-        image = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
-
-    return image
-
-
-def main():
-    images = read_images_from()
-    images_processed = get_images_processed(images)
-
-    show_images_processed(images_processed)
-
-
-if __name__ == "__main__":
-    main()
+# Average accuracy over all images in the dataset :
+averageAcc  = cumulativeAcc/len(IMAGE_DIRS)
+print("dataset performance : " + averageAcc.__str__() + "%")
 
