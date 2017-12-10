@@ -1,4 +1,6 @@
-#DO NOT IMPORT ANY OTHER LIBRARY.
+""" Batuhan Erden S004345 Department of Computer Science """
+
+
 import numpy as np
 import glob
 import cv2
@@ -9,111 +11,109 @@ import SudokuRecognizer as sr
 from mnist_web import mnist
 
 
-# Define your functions here if required :
-def get_nearest_sample_index(sample, train_data):
-    # OpenCV's Support Vector Machine
-    dist_matrix = sample - train_data
-    dist_square = dist_matrix ** 2
-    dist_sums = dist_square.sum(axis=1)
-    distance_vector = np.sqrt(dist_sums)
+def print_confusion_matrix(confusion_matrix):
+    print("\nConfusion matrix where rows are actual values and columns are predicted values..")
 
-    return distance_vector.argmin()
+    print("", end="\t\t")
+    for i in range(10):
+        print("%d" % i, end="\t")
+    print("\n--------------------------------------------------")
 
+    for i in range(len(confusion_matrix)):
+        print("%d | " % i, end="\t")
+        for j in confusion_matrix[i]:
+            print("%d" % j, end="\t")
+        print()
 
-def get_label(ind):
-    l = 0
-    for i in ind:
-        l += 1
-        if i:
-            return l
+    print()
 
 
 # Set dataset path before start example  '/Home/sudoku_dataset-master' :
-sudoku_dataset_dir = '/Users/barisozcan/Documents/CS423 Computer Vision/sudoku_dataset-master'
-MNIST_dataset_dir = "/Users/barisozcan/Documents/MNIST_dataset"
+sudoku_dataset_dir = "./dataset"
+MNIST_dataset_dir = "./MNIST_dataset"
 
 # Load MNIST Dataset:
-MNIST_dataset_dir = "./MNIST_dataset"
-train_images, train_labels, test_images, test_labels = mnist(path="./MNIST_dataset")
+train_images, train_labels, test_images, test_labels = mnist(path=MNIST_dataset_dir)
 
 # Apply PCA to MNIST
-
-print(len(test_images))
-eigenvectors = sr.mnistPCA(train_images)
+train_images, test_images, eigenvectors = sr.mnistPCA(train_images, test_images)
 
 train_data = np.dot(train_images, eigenvectors)
-#train_images = (train_images - np.mean(train_images, axis=0))
 sample_data = np.dot(test_images, eigenvectors)
 
-found = 0
-for i in range(len(test_images)):
-    sample = sample_data[i]
-    delta = get_nearest_sample_index(sample, train_data)
 
-    train_label = get_label(train_labels[delta])
-    sample_label = get_label(test_labels[i])
+num_test_images = len(test_images)
+
+confusion_matrix = np.zeros((10, 10), dtype=np.uint8)
+accuracy = 0.
+
+print("Testing accuracy on MNIST dataset, this might take a while..")
+for i in range(num_test_images):
+    nearest_index, value = sr.get_nearest_euclidean_distance(sample_data[i], train_data)
+
+    train_label = sr.get_label(train_labels[nearest_index])
+    sample_label = sr.get_label(test_labels[i])
 
     if train_label == sample_label:
-        found += 1
+        accuracy += 1 / len(test_images)
+
+    confusion_matrix[sample_label, train_label] += 1
+
+print_confusion_matrix(confusion_matrix)
+print("MNIST dataset performance: {:.2f}%".format(accuracy * 100))
 
 
-accuracy = found / len(test_images)
-print("Accuracy: {}%".format(accuracy))
-
-
-
-# use sr.mnistPCA() that you applier for transformation
-# classify test set with any method you choose (hint simplest one : nearest neighbour)
-# report the outcome
-# Calculate confusion matrix, false postivies/negatives.
-# print(reporting_results)
-
-
-
-image_dirs = sudoku_dataset_dir + '/images/image*.jpg'
-data_dirs = sudoku_dataset_dir + '/images/image*.dat'
+image_dirs = sudoku_dataset_dir + "/images/image*.jpg"
+data_dirs = sudoku_dataset_dir + "/images/image*.dat"
 IMAGE_DIRS = glob.glob(image_dirs)
 DATA_DIRS = glob.glob(data_dirs)
 len(IMAGE_DIRS)
 
 
-#Define your variables etc. outside for loop here:
-
 # Accumulate accuracy for average accuracy calculation.
+confusion_matrix = np.zeros((10, 10), dtype=np.uint8)
 cumulativeAcc = 0
 
-## Loop over all images
+# Loop over all images
+print("-----------")
+print("Testing accuracy on Sudoku dataset, this might take a while..")
 for img_dir, data_dir in zip(IMAGE_DIRS, DATA_DIRS):
-
-    #Define your variables etc.:
     image_name = os.path.basename(img_dir)
     data = np.genfromtxt(data_dir, skip_header=2, dtype=int, delimiter=' ')
     img = cv2.imread(img_dir)
 
-
-    # detect sudoku puzzle:
-    boundingBox = sr.detectSudoku(img)
-
     # Uncomment this section if you would like to see resulting bounding boxes.
-    # cv2.rectangle(img, boundingBox[0], boundingBox[1], (0, 0, 255), 2)
+    # bounding_boxes = sr.detectSudoku(img)
+    # cv2.rectangle(img, bounding_boxes[0][0], bounding_boxes[0][1], (0, 0, 255), 2)
     # cv2.imshow(image_name, img)
     # cv2.waitKey()
 
-    # Recognize digits in sudoku puzzle :
-    sudokuArray = sr.RecognizeSudoku(img)
+    # Recognize digits in sudoku puzzle:
+    try:
+        sudokuArray = sr.RecognizeSudoku(img, train_images, train_labels)
+    except ValueError:  # The case where sudoku cannot be found in the image
+        sudokuArray = np.zeros((9, 9), dtype=np.uint8)
 
-    # Evaluate Result for current image :
-
+    # Evaluate Result for current image:
     detectionAccuracyArray = data == sudokuArray
     accPercentage = np.sum(detectionAccuracyArray)/detectionAccuracyArray.size
     cumulativeAcc = cumulativeAcc + accPercentage
-    print(image_name + " accuracy : " + accPercentage.__str__() + "%")
+
+    straight_data = np.reshape(data, (81, ))
+    straight_sudokuArray = np.reshape(sudokuArray, (81, ))
+
+    for i in range(81):
+        actual = straight_data[i]
+        predicted = straight_sudokuArray[i]
+
+        confusion_matrix[actual, predicted] += 1
+
+    print(image_name + " accuracy : " + str(accPercentage * 100) + "%")
 
 # Calculate confusion matrix, false postivies/negatives for Sudoku dataset here.
+print_confusion_matrix(confusion_matrix)
 
-
-
-# Average accuracy over all images in the dataset :
-averageAcc  = cumulativeAcc/len(IMAGE_DIRS)
-print("dataset performance : " + averageAcc.__str__() + "%")
+# Average accuracy over all images in the dataset:
+averageAcc = cumulativeAcc/len(IMAGE_DIRS)
+print("Sudoku dataset performance: " + str(averageAcc * 100) + "%")
 
