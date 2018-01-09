@@ -1,6 +1,7 @@
 """ Batuhan Erden S004345 Department of Computer Science """
 
 
+import math
 import cv2
 import numpy as np
 
@@ -189,19 +190,23 @@ def get_nearest_euclidean_distance(sample, train_data):
     return nearest, confidence
 
 
-def get_label(arr):
-    return [index for index, item in enumerate(arr) if item][0]
+def convert_labels(labels):
+    labels_converted = []
+
+    for label in labels:
+        labels_converted.append([index for index, item in enumerate(label) if item][0])
+
+    return labels_converted
 
 
 # PCA on MNIST dataset, this function should return PCA transformation for mnist dataset.
-def mnistPCA(train_images, test_images, e=0.8):
+def apply_pca(train_images, e=0.8):
     chosen_eigenvectors = None
 
-    # Subtract means
-    train_images = (train_images - np.mean(train_images, axis=0))
-    test_images = (test_images - np.mean(test_images, axis=0))
+    # Subtract mean
+    train_data = (train_images - np.mean(train_images, axis=0))
 
-    eigenvalues, eigenvectors = np.linalg.eig(np.dot(train_images.T, train_images))
+    eigenvalues, eigenvectors = np.linalg.eig(np.dot(train_data.T, train_data))
     eigenvalues /= eigenvalues.sum()  # Normalization
 
     eigen_sorted_ind = eigenvalues.argsort()
@@ -213,7 +218,7 @@ def mnistPCA(train_images, test_images, e=0.8):
             chosen_eigenvectors = eigenvectors[:, eigen_sorted_ind[i + 1:]]
             break
 
-    return train_images, test_images, chosen_eigenvectors
+    return chosen_eigenvectors
 
 
 def push_black_image(samples, non_zero_counts):
@@ -267,7 +272,17 @@ def get_samples_from_bounding_boxes(img, bounding_boxes, y_left):
     return samples, non_zero_counts
 
 
-def RecognizeSudoku(img, train_images, train_labels):
+def get_image_rotated(img, angle):
+    if angle == 0:
+        return img
+
+    rows, cols, _ = img.shape
+
+    rotation_matrix = cv2.getRotationMatrix2D((cols / 2, rows / 2), angle, 0.7)
+    return cv2.warpAffine(img, rotation_matrix, (cols, rows))
+
+
+def recognize_sudoku(img, classifier, eigenvectors):
     #  An example of SudokuArray is given below :
     #   0 0 0 7 0 0 0 8 0
     #   0 9 0 0 0 3 1 0 0
@@ -280,8 +295,8 @@ def RecognizeSudoku(img, train_images, train_labels):
     #   1 0 5 0 0 4 0 0 0
     # Where 0 represents empty cells in sudoku puzzle. SudokuArray must be a numpy array.
 
-    SudokuArray = np.zeros((9, 9), dtype=np.uint8) - 1
-    bounding_boxes = detectSudoku(img)
+    sudoku_array = np.zeros((9, 9), dtype=np.uint8) - 1
+    bounding_boxes = detect_sudoku(img)
 
     # First bounding box belongs to the sudoku frame while other bounding boxes belong to the sudoku cells
     (x_left, y_left), (x_right, y_right) = bounding_boxes.pop(0)
@@ -293,12 +308,10 @@ def RecognizeSudoku(img, train_images, train_labels):
 
     samples, non_zero_counts = get_samples_from_bounding_boxes(img, bounding_boxes, y_left)
 
-    # Apply PCA to MNIST
-    train_images, samples, eigenvectors = mnistPCA(train_images, samples)
+    samples = (samples - np.mean(samples, axis=0))  # Subtract mean
+    sample_features = np.dot(np.reshape(samples, (81, 784)), eigenvectors)  # Dot product
 
-    train_data = np.dot(train_images, eigenvectors)
-    samples = np.dot(np.reshape(samples, (81, 784)), eigenvectors)
-
+    '''
     for i in range(len(samples)):
         if non_zero_counts[i] <= 50:
             SudokuArray[int(i / 9), i % 9] = 0
@@ -307,12 +320,22 @@ def RecognizeSudoku(img, train_images, train_labels):
 
             train_label = get_label(train_labels[nearest_index])
             SudokuArray[int(i / 9), i % 9] = train_label
+    '''
 
-    return SudokuArray
+    # ----------------------------------- SVM -----------------------------------
+    for i in range(len(sample_features)):
+        if non_zero_counts[i] <= 50:
+            sudoku_array[int(i / 9), i % 9] = 0
+        else:
+            sample = sample_features[i].reshape((1, -1))
+            sudoku_array[int(i / 9), i % 9] = classifier.predict(sample)
+    # ---------------------------------------------------------------------------
+
+    return sudoku_array
 
 
 # Returns Sudoku puzzle bounding box following format: [(x_left, y_left), (x_right, y_right)]
-def detectSudoku(img):
+def detect_sudoku(img):
     sd = SudokuDetector(img)
     sudoku_frame, sudoku = sd.get_sudoku_from_image()
 

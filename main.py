@@ -2,6 +2,7 @@
 
 
 import numpy as np
+import pickle
 import glob
 import cv2
 import os
@@ -9,6 +10,15 @@ from matplotlib import pyplot as plt
 
 import SudokuRecognizer as sr
 from mnist_web import mnist
+from sklearn import svm
+
+
+# Set dataset paths before start. For example: '/Home/sudoku_dataset-master'
+SUDOKU_DATASET_DIR = "./dataset"
+MNIST_DATASET_DIR = "./MNIST_dataset"
+
+IMAGE_DIRS = SUDOKU_DATASET_DIR + "/images/image*.jpg"
+DATA_DIRS = SUDOKU_DATASET_DIR + "/images/image*.dat"
 
 
 def print_confusion_matrix(confusion_matrix):
@@ -28,92 +38,106 @@ def print_confusion_matrix(confusion_matrix):
     print()
 
 
-# Set dataset path before start example  '/Home/sudoku_dataset-master' :
-sudoku_dataset_dir = "./dataset"
-MNIST_dataset_dir = "./MNIST_dataset"
+def load_mnist_dataset():
+    print("Console: Loading MNIST dataset..")
+    train_images, train_labels, test_images, test_labels = mnist(path=MNIST_DATASET_DIR)
+    train_labels, test_labels = sr.convert_labels(train_labels), sr.convert_labels(test_labels)
 
-# Load MNIST Dataset:
-train_images, train_labels, test_images, test_labels = mnist(path=MNIST_dataset_dir)
-
-# Apply PCA to MNIST
-train_images, test_images, eigenvectors = sr.mnistPCA(train_images, test_images)
-
-train_data = np.dot(train_images, eigenvectors)
-sample_data = np.dot(test_images, eigenvectors)
+    print("Console: MNIST dataset loaded.")
+    return train_images, train_labels, test_images, test_labels
 
 
-num_test_images = len(test_images)
+def apply_pca_to_mnist(train_images):
+    print("Console: Applying PCA on MNIST dataset..")
+    eigenvectors = sr.apply_pca(train_images)  # Apply PCA to train images
 
-confusion_matrix = np.zeros((10, 10), dtype=np.uint8)
-accuracy = 0.
+    train_images = (train_images - np.mean(train_images, axis=0))  # Subtract mean
+    train_features = np.dot(train_images, eigenvectors)  # Dot product
 
-print("Testing accuracy on MNIST dataset, this might take a while..")
-for i in range(num_test_images):
-    nearest_index, value = sr.get_nearest_euclidean_distance(sample_data[i], train_data)
-
-    train_label = sr.get_label(train_labels[nearest_index])
-    sample_label = sr.get_label(test_labels[i])
-
-    if train_label == sample_label:
-        accuracy += 1 / len(test_images)
-
-    confusion_matrix[sample_label, train_label] += 1
-
-print_confusion_matrix(confusion_matrix)
-print("MNIST dataset performance: {:.2f}%".format(accuracy * 100))
+    print("Console: PCA applied on MNIST dataset.")
+    return train_features, eigenvectors
 
 
-image_dirs = sudoku_dataset_dir + "/images/image*.jpg"
-data_dirs = sudoku_dataset_dir + "/images/image*.dat"
-IMAGE_DIRS = glob.glob(image_dirs)
-DATA_DIRS = glob.glob(data_dirs)
-len(IMAGE_DIRS)
-
-
-# Accumulate accuracy for average accuracy calculation.
-confusion_matrix = np.zeros((10, 10), dtype=np.uint8)
-cumulativeAcc = 0
-
-# Loop over all images
-print("-----------")
-print("Testing accuracy on Sudoku dataset, this might take a while..")
-for img_dir, data_dir in zip(IMAGE_DIRS, DATA_DIRS):
-    image_name = os.path.basename(img_dir)
-    data = np.genfromtxt(data_dir, skip_header=2, dtype=int, delimiter=' ')
-    img = cv2.imread(img_dir)
-
-    # Uncomment this section if you would like to see resulting bounding boxes.
-    # bounding_boxes = sr.detectSudoku(img)
-    # cv2.rectangle(img, bounding_boxes[0][0], bounding_boxes[0][1], (0, 0, 255), 2)
-    # cv2.imshow(image_name, img)
-    # cv2.waitKey()
-
-    # Recognize digits in sudoku puzzle:
+def build_classifier(train_features, train_labels, test_features, test_labels):
     try:
-        sudokuArray = sr.RecognizeSudoku(img, train_images, train_labels)
+        with open("classifier.pkl", "rb") as reader:
+            print("Console: A pre-saved classifier loaded.")
+            classifier = pickle.load(reader)
+    except OSError:
+        print("Console: No pre-saved classifier found.")
+        print("Console: Building a new classifier, this might take a while..")
+
+        classifier = svm.SVC(kernel="rbf", C=5, gamma=0.05)
+        classifier.fit(train_features, train_labels)
+
+        with open("classifier.pkl", "wb") as writer:
+            pickle.dump(classifier, writer)
+            print("Console: Classifier saved to the memory.")
+
+    print("Console: MNIST dataset performance: {:.4f}%".format(classifier.score(test_features, test_labels) * 100))
+    return classifier
+
+
+def read_image_and_its_data(img_dir, data_dir):
+    name = os.path.basename(img_dir)
+    img = cv2.imread(img_dir)
+    data = np.genfromtxt(data_dir, skip_header=2, dtype=int, delimiter=' ')
+
+    return name, img, data
+
+
+def show_bounding_boxes(name, img):
+    bounding_boxes = sr.detect_sudoku(img)
+    cv2.rectangle(img, bounding_boxes[0][0], bounding_boxes[0][1], (0, 0, 255), 2)
+    cv2.imshow(name, img)
+    cv2.waitKey()
+
+
+def obtain_sudoku_array(name, img, classifier, eigenvectors):
+    sudoku_array = np.zeros((9, 9), dtype=np.uint8)
+
+    try:
+        sudoku_array = sr.recognize_sudoku(img, classifier, eigenvectors)
     except ValueError:  # The case where sudoku cannot be found in the image
-        sudokuArray = np.zeros((9, 9), dtype=np.uint8)
+        print("Console: No sudoku found in " + name + ".")
 
-    # Evaluate Result for current image:
-    detectionAccuracyArray = data == sudokuArray
-    accPercentage = np.sum(detectionAccuracyArray)/detectionAccuracyArray.size
-    cumulativeAcc = cumulativeAcc + accPercentage
+    return sudoku_array
 
-    straight_data = np.reshape(data, (81, ))
-    straight_sudokuArray = np.reshape(sudokuArray, (81, ))
 
-    for i in range(81):
-        actual = straight_data[i]
-        predicted = straight_sudokuArray[i]
+def main():
+    train_images, train_labels, test_images, test_labels = load_mnist_dataset()
+    train_features, eigenvectors = apply_pca_to_mnist(train_images)
 
-        confusion_matrix[actual, predicted] += 1
+    test_images = (test_images - np.mean(test_images, axis=0))  # Subtract mean
+    test_features = np.dot(test_images, eigenvectors)  # Dot product
 
-    print(image_name + " accuracy : " + str(accPercentage * 100) + "%")
+    classifier = build_classifier(train_features, train_labels, test_features, test_labels)
 
-# Calculate confusion matrix, false postivies/negatives for Sudoku dataset here.
-print_confusion_matrix(confusion_matrix)
+    cumulative_accuracy = 0
+    num_images = len(glob.glob(IMAGE_DIRS))
 
-# Average accuracy over all images in the dataset:
-averageAcc = cumulativeAcc/len(IMAGE_DIRS)
-print("Sudoku dataset performance: " + str(averageAcc * 100) + "%")
+    # Loop over all images
+    print("Console: Testing accuracy on Sudoku dataset, this might take a while..")
+    for img_dir, data_dir in zip(glob.glob(IMAGE_DIRS), glob.glob(DATA_DIRS)):
+        name, img, data = read_image_and_its_data(img_dir, data_dir)
+
+        # Uncomment this section if you would like to see resulting bounding boxes.
+        # show_bounding_boxes(name, img)
+
+        sudoku_array = obtain_sudoku_array(name, img, classifier, eigenvectors)
+
+        # Evaluate result for current image
+        detection_accuracy_array = data == sudoku_array
+        acc_percentage = np.sum(detection_accuracy_array) / detection_accuracy_array.size
+        cumulative_accuracy = cumulative_accuracy + acc_percentage
+
+        print("Console: " + name + " accuracy : " + str(acc_percentage * 100) + "%")
+
+    # Average accuracy over all images in the dataset
+    average_accuracy = cumulative_accuracy / num_images
+    print("Console: Sudoku dataset performance: " + str(average_accuracy * 100) + "%")
+
+
+if __name__ == '__main__':
+    main()
 
