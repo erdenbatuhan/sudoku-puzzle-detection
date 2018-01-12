@@ -1,193 +1,9 @@
 """ Batuhan Erden S004345 Department of Computer Science """
 
 
-import math
 import cv2
 import numpy as np
-
-
-class Kernel(object):
-
-    def __init__(self, image, block_size=11):
-        self.image = image
-        self.block_size = block_size
-        self.blur_kernel_size, self.morphology_kernel = None, None
-
-        self.calculate_parameters()
-
-    def calculate_parameters(self):
-        blurriness_level = self.get_blurriness_level(self.image)
-
-        self.blur_kernel_size = (5 + blurriness_level, 5 + blurriness_level) \
-            if not blurriness_level % 2 \
-            else (4 + blurriness_level, 4 + blurriness_level)
-        self.morphology_kernel = np.ones((3 + blurriness_level, 3 + blurriness_level), np.uint8)
-
-    @staticmethod
-    def get_blurriness_level(image):
-        blurriness_level = 0
-        variance = cv2.Laplacian(image, cv2.CV_64F).var()
-
-        for threshold in [120, 100, 60, 15, 10]:
-            if variance <= threshold:
-                blurriness_level += 1
-            else:
-                break
-
-        return blurriness_level
-
-    def get_image_filtered(self, image):
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)  # Make the image gray
-        blurred = cv2.GaussianBlur(gray, self.blur_kernel_size, 0)  # Apply Gaussian Blur on the image
-        thresh = cv2.adaptiveThreshold(blurred, 255, 1, 1, self.block_size, 2)  # Threshold the image
-        morphology = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, self.morphology_kernel)  # Apply morphology operations
-
-        return morphology
-
-
-class SudokuDetector(object):
-
-    def __init__(self, image):
-        self.image = image
-
-        self.kernel = Kernel(image)
-        self.min_area = self.get_min_area()
-
-    @staticmethod
-    def deepsort_rectangles(rectangles_in_sudoku):
-        def sort_y_x(rectangle):
-            x, y, w, h = cv2.boundingRect(rectangle)
-            return y, x
-
-        def sort_x(rectangle):
-            x, y, w, h = cv2.boundingRect(rectangle)
-            return x
-
-        sorted_rectangles = []
-
-        rectangles_in_sudoku.sort(key=sort_y_x)
-        del rectangles_in_sudoku[0]  # Remove the biggest rectangle
-
-        rows = [[]]
-        prev, c = None, 0
-        for r in rectangles_in_sudoku:
-            x, y, w, h = cv2.boundingRect(r)
-
-            if prev is not None and y - prev > h * .5:
-                rows.append([])
-                c += 1
-
-            rows[c].append(r)
-            prev = y
-
-        for row in rows:
-            row.sort(key=sort_x)
-
-            for r in row:
-                sorted_rectangles.append(r)
-
-        return sorted_rectangles
-
-    @staticmethod
-    def get_points_of_rectangle(rectangle):
-        (x, y, w, h) = cv2.boundingRect(rectangle)
-        return (x, y), (x + w, y + h)
-
-    def get_min_area(self):
-        (h, w) = self.image.shape[:2]
-        return (w * h) / 500
-
-    def find_contours_in_image(self, mode=cv2.RETR_TREE, method=cv2.CHAIN_APPROX_SIMPLE):
-        image_filtered = self.kernel.get_image_filtered(self.image)
-        _, contours, _ = cv2.findContours(image_filtered, mode, method)  # Find the contours in the image
-
-        return contours
-
-    def get_rectangles_from_contours(self, contours, e=0.04):
-        rectangles = []
-
-        for contour in contours:
-            area = cv2.contourArea(contour)
-
-            if area >= self.min_area:
-                epsilon = e * cv2.arcLength(contour, True)
-                approx = cv2.approxPolyDP(contour, epsilon, True)
-
-                if len(approx) == 4:  # It's a rectangle
-                    rectangles.append(contour)
-
-        return rectangles
-
-    def get_sudoku_frame(self, rectangles, min_rectangle_count=50):
-        possible_sudoku_frames = []
-
-        for i in range(len(rectangles)):
-            (X1, Y1), (X2, Y2) = self.get_points_of_rectangle(rectangles[i])
-            rectangle_count = 0
-
-            for j in range(len(rectangles)):
-                (x1, y1), (x2, y2) = self.get_points_of_rectangle(rectangles[j])
-
-                if x1 >= X1 and y1 >= Y1 and x2 <= X2 and y2 <= Y2:
-                    rectangle_count += 1
-
-            if rectangle_count >= min_rectangle_count:
-                possible_sudoku_frames.append((rectangles[i], rectangle_count))
-
-        if len(possible_sudoku_frames) == 0:
-            return []
-
-        return sorted(possible_sudoku_frames, key=lambda x: x[1])[0][0]
-
-    def get_sudoku_from_image(self):
-        contours = self.find_contours_in_image()
-        rectangles = self.get_rectangles_from_contours(contours)
-
-        sudoku_frame = self.get_sudoku_frame(rectangles)
-
-        if len(sudoku_frame) == 0:
-            if self.kernel.block_size <= 101:
-                self.kernel.block_size += 10
-                return self.get_sudoku_from_image()
-            else:
-                return []
-
-        rectangles_in_sudoku = []
-        (X1, Y1), (X2, Y2) = self.get_points_of_rectangle(sudoku_frame)
-
-        for rectangle in rectangles:
-            (x1, y1), (x2, y2) = self.get_points_of_rectangle(rectangle)
-
-            if x1 >= X1 and y1 >= Y1 and x2 <= X2 and y2 <= Y2:
-                rectangles_in_sudoku.append(rectangle)
-
-        rectangles_in_sudoku = self.deepsort_rectangles(rectangles_in_sudoku)
-        return sudoku_frame, rectangles_in_sudoku
-
-    def draw_rectangle(self, rectangle, color, thickness=3):
-        (x, y, w, h) = cv2.boundingRect(rectangle)
-        cv2.rectangle(self.image, (x, y), (x + w, y + h), color, thickness)
-
-    def draw_sudoku(self):
-        sudoku_frame, sudoku = self.get_sudoku_from_image()
-
-        if len(sudoku) == 0:
-            return
-
-        for rectangle in sudoku:
-            self.draw_rectangle(rectangle, (255, 0, 0))
-
-        self.draw_rectangle(sudoku_frame, (0, 0, 255))
-
-
-def get_nearest_euclidean_distance(sample, train_data):
-    distances_squared = (sample - train_data) ** 2
-    distances_sum = distances_squared.sum(axis=1)
-
-    nearest = distances_sum.argmin()
-    confidence = distances_sum[nearest]
-
-    return nearest, confidence
+from SudokuDetector import SudokuDetector
 
 
 def convert_labels(labels):
@@ -199,26 +15,30 @@ def convert_labels(labels):
     return labels_converted
 
 
-# PCA on MNIST dataset, this function should return PCA transformation for mnist dataset.
-def apply_pca(train_images, e=0.8):
-    chosen_eigenvectors = None
+def detect_sudoku(img):
+    sudoku_detector = SudokuDetector(img)
+    sudoku_frame, sudoku_rectangles, max_approx, found = sudoku_detector.get_sudoku_from_image()
 
-    # Subtract mean
-    train_data = (train_images - np.mean(train_images, axis=0))
+    if not found:
+        return [], []
 
-    eigenvalues, eigenvectors = np.linalg.eig(np.dot(train_data.T, train_data))
-    eigenvalues /= eigenvalues.sum()  # Normalization
+    # Uncomment this section if you would like to see the sudoku with rectangles found.
+    # sd.draw_sudoku()
+    # cv2.imshow("Sudoku with rectangles found", img)
+    # cv2.waitKey(0)
 
-    eigen_sorted_ind = eigenvalues.argsort()
-    eigenvalues_sum = 0.
+    bounding_boxes = []
+    for each in [sudoku_frame] + sudoku_rectangles:
+        x, y, w, h = cv2.boundingRect(each)
+        x_left, y_left, x_right, y_right = x, y, x + w, y + h
 
-    for i in reversed(range(len(eigen_sorted_ind))):
-        eigenvalues_sum += eigenvalues[eigen_sorted_ind[i]]
-        if eigenvalues_sum >= e:
-            chosen_eigenvectors = eigenvectors[:, eigen_sorted_ind[i + 1:]]
-            break
+        bounding_boxes.append([(x_left, y_left), (x_right, y_right)])
 
-    return chosen_eigenvectors
+    # for b in bounding_boxes:
+    #     (x_left, y_left), (x_right, y_right) = b
+    #     cv2.rectangle(img, (x_left, y_left), (x_right, y_right), color=(0, 0, 255), thickness=2)
+
+    return bounding_boxes, max_approx
 
 
 def push_black_image(samples, non_zero_counts):
@@ -228,7 +48,7 @@ def push_black_image(samples, non_zero_counts):
     non_zero_counts.append(0)
 
 
-def get_samples_from_bounding_boxes(img, bounding_boxes, y_left):
+def get_samples_from_bounding_boxes(img, bounding_boxes, y_left, motion):
     samples = []
     non_zero_counts = []
 
@@ -241,16 +61,17 @@ def get_samples_from_bounding_boxes(img, bounding_boxes, y_left):
         (h, w) = box.shape[:2]
         box = box[int(h * .125): int(h * .875), int(w * .125): int(w * .875)]
 
+        # Preprocess the image
         gray = cv2.cvtColor(box, cv2.COLOR_BGR2GRAY)
         blur = cv2.medianBlur(gray, 5)
         threshold = cv2.adaptiveThreshold(blur, 255, 0, 1, 11, 7)
-        box = cv2.morphologyEx(threshold, cv2.MORPH_OPEN, (5, 5))
+        digit = cv2.morphologyEx(threshold, cv2.MORPH_OPEN, (5, 5))
 
         # Count non-zero pixels in order to decide the content
-        non_zero_counts.append(cv2.countNonZero(box))
+        non_zero_counts.append(cv2.countNonZero(digit))
 
-        box = cv2.resize(box, (28, 28), interpolation=cv2.INTER_AREA)
-        box = box / 255  # Division is needed because MNIST dataset is normalized between [0, 1]
+        digit = cv2.resize(digit, (28, 28), interpolation=cv2.INTER_AREA)
+        digit = digit / 255  # Division is needed because MNIST dataset is normalized between [0, 1]
 
         if prev is not None and y_left - prev >= (y_right - y_left) / 2:
             # Assign 0 for the rectangles that could not be found
@@ -260,7 +81,7 @@ def get_samples_from_bounding_boxes(img, bounding_boxes, y_left):
 
             c = 0
 
-        samples.append(box)
+        samples.append(digit)
         c += 1
 
         prev = y_left
@@ -272,83 +93,156 @@ def get_samples_from_bounding_boxes(img, bounding_boxes, y_left):
     return samples, non_zero_counts
 
 
-def get_image_rotated(img, angle):
-    if angle == 0:
-        return img
+def get_samples_from_warped(warped, motion):
+    params = {
+        "blurSize": 1 if motion else 5,
+        "blockSize": 51 if motion else 11
+    }
 
-    rows, cols, _ = img.shape
+    samples = []
+    non_zero_counts = []
 
-    rotation_matrix = cv2.getRotationMatrix2D((cols / 2, rows / 2), angle, 0.7)
-    return cv2.warpAffine(img, rotation_matrix, (cols, rows))
+    h, w, _ = warped.shape
+    dy, dx = h / 9, w / 9
+
+    for i in range(0, 9):
+        for j in range(0, 9):
+            y = i * dy
+            x = j * dx
+
+            box = warped[int(y): int(y + dy), int(x): int(x + dx)]
+
+            # Crop the image again to obtain the digit only
+            (h, w) = box.shape[:2]
+            box = box[int(h * .1): int(h * .9), int(w * .1): int(w * .9)]
+
+            # Preprocess the image
+            gray = cv2.cvtColor(box, cv2.COLOR_BGR2GRAY)
+            blur = cv2.medianBlur(gray, params["blurSize"])
+            threshold = cv2.adaptiveThreshold(blur, 255, 0, 1, params["blockSize"], 7)
+
+            if not motion:
+                digit = cv2.morphologyEx(threshold, cv2.MORPH_OPEN, (5, 5))
+            else:
+                digit = cv2.erode(threshold, np.ones((3, 3), np.uint8), iterations=1)
+
+            # Count non-zero pixels in order to decide the content
+            non_zero_counts.append(cv2.countNonZero(digit))
+
+            digit = cv2.resize(digit, (28, 28), interpolation=cv2.INTER_AREA)
+            digit = digit / 255  # Division is needed because MNIST dataset is normalized between [0, 1]
+
+            samples.append(digit)
+
+    return samples, non_zero_counts
 
 
-def recognize_sudoku(img, classifier, eigenvectors):
-    #  An example of SudokuArray is given below :
-    #   0 0 0 7 0 0 0 8 0
-    #   0 9 0 0 0 3 1 0 0
-    #   0 0 6 8 0 5 0 7 0
-    #   0 2 0 6 0 0 0 4 9
-    #   0 0 0 2 0 0 0 5 0
-    #   0 0 8 0 4 0 0 0 7
-    #   0 0 0 9 0 0 0 3 0
-    #   3 7 0 0 0 0 0 0 6
-    #   1 0 5 0 0 4 0 0 0
-    # Where 0 represents empty cells in sudoku puzzle. SudokuArray must be a numpy array.
-
-    sudoku_array = np.zeros((9, 9), dtype=np.uint8) - 1
-    bounding_boxes = detect_sudoku(img)
+def recognize_sudoku(img, warped, model, motion=False):
+    sudoku_array = np.zeros((9, 9, 3), dtype=np.uint8)
+    bounding_boxes, y_left = [], 0.
 
     # First bounding box belongs to the sudoku frame while other bounding boxes belong to the sudoku cells
-    (x_left, y_left), (x_right, y_right) = bounding_boxes.pop(0)
+    try:
+        bounding_boxes, _ = detect_sudoku(img)
+        (_, y_left), _ = bounding_boxes.pop(0)
+    except IndexError:
+        sudoku_array -= 1
 
-    # Uncomment this section if you would like to see resulting bounding boxes.
-    # sudoku = img[int(y_left): int(y_right), int(x_left):int(x_right)]
-    # cv2.imshow("Sudoku", sudoku)
-    # cv2.waitKey(0)
+    samples, non_zero_counts = get_samples_from_bounding_boxes(img, bounding_boxes, y_left, motion)
+    non_zero_threshold = 50
 
-    samples, non_zero_counts = get_samples_from_bounding_boxes(img, bounding_boxes, y_left)
+    if np.sum(sudoku_array) != 0 or len(samples) > 81:
+        sudoku_array = np.zeros((9, 9, 3), dtype=np.uint8)
 
-    samples = (samples - np.mean(samples, axis=0))  # Subtract mean
-    sample_features = np.dot(np.reshape(samples, (81, 784)), eigenvectors)  # Dot product
+        samples, non_zero_counts = get_samples_from_warped(warped, motion)
+        non_zero_threshold = 100 if np.mean(non_zero_counts) < 500 else 500
 
-    '''
+    samples = np.reshape(samples, (-1, 28, 28, 1))
+
     for i in range(len(samples)):
-        if non_zero_counts[i] <= 50:
-            SudokuArray[int(i / 9), i % 9] = 0
-        else:
-            nearest_index, value = get_nearest_euclidean_distance(samples[i], train_data)
+        sample = np.array([samples[i]])
+        predictions = []
 
-            train_label = get_label(train_labels[nearest_index])
-            SudokuArray[int(i / 9), i % 9] = train_label
-    '''
+        confidences = model.predict(sample, verbose=0)[0]  # Obtain confidences for each digit
+        # confidences[0] = -np.inf  # Make 0's confidence -inf
 
-    # ----------------------------------- SVM -----------------------------------
-    for i in range(len(sample_features)):
-        if non_zero_counts[i] <= 50:
-            sudoku_array[int(i / 9), i % 9] = 0
-        else:
-            sample = sample_features[i].reshape((1, -1))
-            sudoku_array[int(i / 9), i % 9] = classifier.predict(sample)
-    # ---------------------------------------------------------------------------
+        for _ in range(3):
+            next_prediction = np.argmax(confidences)  # Get next predicted digit
+            predictions.append(next_prediction)       # Append next predicted digit to predictions
+            confidences[next_prediction] = -np.inf    # Make next predicted digit's confidence -inf
+
+        sudoku_array[int(i / 9), i % 9] = predictions
 
     return sudoku_array
 
 
-# Returns Sudoku puzzle bounding box following format: [(x_left, y_left), (x_right, y_right)]
-def detect_sudoku(img):
-    sd = SudokuDetector(img)
-    sudoku_frame, sudoku = sd.get_sudoku_from_image()
+# # PCA on MNIST dataset, this function should return PCA transformation for mnist dataset.
+# def apply_pca(X, e):
+#     print("Console: Applying PCA on MNIST dataset..")
+#     chosen_eigenvectors = None
+#
+#     # Subtract mean
+#     X = (X - np.mean(X, axis=0))
+#
+#     eigenvalues, eigenvectors = np.linalg.eig(np.dot(X.T, X))  # Covariance Matrix
+#     eigenvalues /= eigenvalues.sum()  # Normalization
+#
+#     eigen_sorted_ind = eigenvalues.argsort()
+#     eigenvalues_sum = 0.
+#
+#     for i in reversed(range(len(eigen_sorted_ind))):
+#         eigenvalues_sum += eigenvalues[eigen_sorted_ind[i]]
+#         if eigenvalues_sum >= e:
+#             chosen_eigenvectors = eigenvectors[:, eigen_sorted_ind[i + 1:]]
+#             break
+#
+#     print("Console: PCA applied on MNIST dataset.")
+#     return chosen_eigenvectors
+#
+#
+# def get_image_rotated(img, angle):
+#     if angle == 0:
+#         return img
+#
+#     (h, w) = img.shape[:2]
+#     (cX, cY) = (w // 2, h // 2)
+#
+#     M = cv2.getRotationMatrix2D((cX, cY), -angle, 1.0)
+#
+#     cos = np.abs(M[0, 0])
+#     sin = np.abs(M[0, 1])
+#
+#     nW = int((h * sin) + (w * cos))
+#     nH = int((h * cos) + (w * sin))
+#
+#     M[0, 2] += (nW / 2) - cX
+#     M[1, 2] += (nH / 2) - cY
+#
+#     return cv2.warpAffine(img, M, (nW, nH))
+#
+#
+# def directly_detec_sudoku(img):
+#     # variables for the biggest detected contour expected to be Sudoku
+#     maxContour, maxArea, maxPer = [], 0, 0
+#
+#     # smallFrame -> Grayscale -> Blur -> Threshold
+#     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+#     blur = cv2.GaussianBlur(gray, (5, 5), 0)
+#     threshold = cv2.adaptiveThreshold(blur, 255, 1, 1, 51, 1)
+#     cntOutIm, cnt, hierarchy = cv2.findContours(threshold, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+#
+#     if cnt != []:
+#         for a in cnt:
+#             x, y, w, h = cv2.boundingRect(a)
+#             if (cv2.arcLength(a, True) >= maxPer and w / h > 0.75 and w / h < 1.25 and cv2.contourArea(a) >= maxArea):
+#                 maxPer = cv2.arcLength(a, True)
+#                 maxContour = a
+#                 maxArea = cv2.contourArea(a)
+#
+#     maxX, maxY, maxW, maxH = cv2.boundingRect(maxContour)
+#     topLeftx, topLefty, botRightx, botRighty = maxX, maxY, maxX + maxW, maxY + maxH
+#     boundingBox = [(topLeftx, topLefty), (botRightx, botRighty)]
+#     approx = cv2.approxPolyDP(maxContour, 0.02 * maxPer, True)
+#     maxContour = approx
+#     return boundingBox, maxContour
 
-    # Uncomment this section if you would like to see the sudoku with rectangles found.
-    # sd.draw_sudoku()
-    # cv2.imshow("Sudoku with rectangles found", img)
-    # cv2.waitKey(0)
-
-    bounding_boxes = []
-    for each in [sudoku_frame] + sudoku:
-        x, y, w, h = cv2.boundingRect(each)
-        x_left, y_left, x_right, y_right = x, y, x + w, y + h
-
-        bounding_boxes.append([(x_left, y_left), (x_right, y_right)])
-
-    return bounding_boxes
