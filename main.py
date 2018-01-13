@@ -31,7 +31,7 @@ VIDEO_DIRS = SUDOKU_DATASET_DIR + "/test_videos/*.mp4"
 IMAGE_DIRS = SUDOKU_DATASET_DIR + "/images/*.jpg"
 DATA_DIRS = SUDOKU_DATASET_DIR + "/images/*.dat"
 
-IS_VIDEO = False  # Make IS_VIDEO False if you want to loop over all images instead of looping over all videos
+IS_VIDEO = True  # Make IS_VIDEO False if you want to loop over all images instead of looping over all videos
 
 
 def get_image_rotated(img, angle):
@@ -334,8 +334,8 @@ def main():
 
                     print("Console: " + name + " accuracy : " + str(acc_percentage * 100) + "%")
 
-                    # cv2.imshow("Sudoku Solution", img)
-                    # cv2.waitKey()
+                    cv2.imshow("Sudoku Solution", img)
+                    cv2.waitKey()
             except Exception:
                 pass
 
