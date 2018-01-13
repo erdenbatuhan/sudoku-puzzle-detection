@@ -27,11 +27,11 @@ from keras.layers import Conv2D, MaxPooling2D
 SUDOKU_DATASET_DIR = "/Users/batuhan/Documents/workspace/Sudoku-Puzzle-Detection/dataset"
 MNIST_DATASET_DIR = "/Users/batuhan/Documents/workspace/Sudoku-Puzzle-Detection/MNIST_dataset"
 
-VIDEO_DIRS = SUDOKU_DATASET_DIR + "/test_videos/test-*.mp4"
-IMAGE_DIRS = SUDOKU_DATASET_DIR + "/images/image*.jpg"
-DATA_DIRS = SUDOKU_DATASET_DIR + "/images/image*.dat"
+VIDEO_DIRS = SUDOKU_DATASET_DIR + "/test_videos/*.mp4"
+IMAGE_DIRS = SUDOKU_DATASET_DIR + "/images/*.jpg"
+DATA_DIRS = SUDOKU_DATASET_DIR + "/images/*.dat"
 
-IS_VIDEO = True  # Make IS_VIDEO False if you want to loop over all images instead of looping over all videos
+IS_VIDEO = False  # Make IS_VIDEO False if you want to loop over all images instead of looping over all videos
 
 
 def get_image_rotated(img, angle):
@@ -254,7 +254,7 @@ def main():
             video_name = os.path.basename(video_dir)
             video = cv2.VideoCapture(video_dir)
 
-            sudoku_solution, original_digits = np.zeros((9, 9, 3), dtype=np.uint8), np.ones((9, 9), dtype=np.uint8)
+            sudoku_solution, original_digits = np.zeros((9, 9), dtype=np.uint8), np.ones((9, 9), dtype=np.uint8)
 
             count = 0
             while video.isOpened():
@@ -271,7 +271,7 @@ def main():
                             warped, max_approx, rect, dst, is_warped = warp(frame, [bounding_box], max_approx)
 
                             if is_warped:
-                                if count % 10 == 0:
+                                if np.sum(sudoku_solution) == 0 or count % 10 == 0:
                                     try:
                                         sudoku_array = SudokuRecognizer.recognize_sudoku(frame, warped, model,
                                                                                          bounding_box)
