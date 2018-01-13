@@ -6,24 +6,33 @@ import numpy as np
 
 
 def solve(sudoku_array):
+    solution, is_solved = solve_trying_best_3_brute_force(sudoku_array)
+
+    if is_solved:
+        return solution, True
+
+    solution = insafe_solve(sudoku_array)
+    return solution, False
+
+
+def solve_trying_best_3_brute_force(sudoku_array):
     actual = sudoku_array[:, :, 0].copy()
 
-    for m in range(len(sudoku_array[0][0])):
-        for i in range(len(sudoku_array)):
-            for j in range(len(sudoku_array[0])):
-                for k in range(len(sudoku_array[0][0])):
-                    actual[i, j] = int(sudoku_array[i, j, k])
+    for i in range(len(sudoku_array)):
+        for j in range(len(sudoku_array[0])):
+            for k in range(len(sudoku_array[0][0])):
+                actual[i, j] = int(sudoku_array[i, j, k])
 
-                    if actual[i, j] != 0:
-                        try:
-                            solver = SudokuSolver(actual)
-                            solver.solve()
+                if actual[i, j] != 0:
+                    try:
+                        solver = SudokuSolver(actual)
+                        solver.solve()
 
-                            return solver.solution, True
-                        except ValueError:
-                            pass
+                        return solver.solution, True
+                    except ValueError:
+                        pass
 
-                actual[i, j] = int(sudoku_array[i, j, m])
+            actual[i, j] = int(sudoku_array[i, j, 0])
 
     return sudoku_array[:, :, 0], False
 
@@ -201,4 +210,79 @@ class SudokuSolver:
     @staticmethod
     def format(x):
         return '\n'.join([' '.join([str(e[0]) for e in row]) for row in x])
+
+
+def insafe_solve(sudoku_array):
+    sudoku = sudoku_array[:, :, 0].copy()
+
+    a = sudoku[0:3, 0:3]
+    b = sudoku[0:3, 3:6]
+    c = sudoku[0:3, 6:9]
+    d = sudoku[3:6, 0:3]
+    e = sudoku[3:6, 3:6]
+    f = sudoku[3:6, 6:9]
+    g = sudoku[6:9, 0:3]
+    h = sudoku[6:9, 3:6]
+    i = sudoku[6:9, 6:9]
+
+    sub_sudokus = [a, b, c, d, e, f, g, h, i]
+
+    for sub_sudoku in sub_sudokus:
+        sub_sudoku[sub_sudoku == 0] = possibleEntry(sub_sudoku)
+        crosshatch(sudoku)
+
+    checksudoku(sudoku)
+    return sudoku
+
+
+def possibleEntry(arr2, arr1=np.arange(1, 10)):
+    if len(arr1) == 0: # if comparing array is empty, just return the other array
+        return arr2
+    else:
+        choice = np.setdiff1d(arr1, arr2)
+        if len(choice) > 0: # if not empty join into a single number
+            choice = int(''.join(str(i) for i in choice))
+            return choice
+        else: # if empty, return empty array
+            return choice
+
+
+def crosshatch(sudoku):
+    # set array to add possible numbers to, based on row and column
+    pool = np.empty(0, dtype=np.int64)
+
+    sudoku_length = sudoku.shape[0]
+    for x in range(sudoku_length):  # row
+        for y in range(sudoku_length):  # column
+            # if element is longer than 1 digit check its row and column
+            if len(str(sudoku[x, y])) > 1:
+
+                pool = np.append(pool, sudoku[x, :])  # append all the numbers in that element's row
+                pool = np.append(pool, sudoku[:, y])  # append all the numbers in that element's column
+                pool = pool[pool < 10]  # eliminate any number laster than 9
+
+                # convert current element into an array of numbers
+                current = np.array([int(i) for i in str(sudoku[x, y])], dtype=np.int64)
+
+                # assign the element to a new possibleEntry
+                try:
+                    sudoku[x, y] = possibleEntry(pool, current)
+                except ValueError:
+                    sudoku[x, y] = 0
+
+                # reset the pool for the next element
+                pool = np.empty(0, dtype=np.int64)
+
+    return sudoku
+
+
+def checksudoku(sudoku):
+    sudoku_length = sudoku.shape[0]
+    for x in range(sudoku_length):  # row
+        for y in range(sudoku_length):  # column
+            if sudoku[x, y] > 9 or int(sudoku[x, y]) == 0:
+                b = np.random.randint(3, 6, size=1)[0]
+                sudoku[x, y] = (np.random.randint(1, 10, size=1)[0] ** b % 9) + 1
+
+    return True
 

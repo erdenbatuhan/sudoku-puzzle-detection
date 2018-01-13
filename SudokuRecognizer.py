@@ -6,6 +6,51 @@ import numpy as np
 from SudokuDetector import SudokuDetector
 
 
+# PCA on MNIST dataset, this function should return PCA transformation for mnist dataset.
+def apply_pca(X, e=0.8):
+    print("Console: Applying PCA on MNIST dataset..")
+    chosen_eigenvectors = None
+
+    # Subtract mean
+    X = (X - np.mean(X, axis=0))
+
+    eigenvalues, eigenvectors = np.linalg.eig(np.dot(X.T, X))  # Covariance Matrix
+    eigenvalues /= eigenvalues.sum()  # Normalization
+
+    eigen_sorted_ind = eigenvalues.argsort()
+    eigenvalues_sum = 0.
+
+    for i in reversed(range(len(eigen_sorted_ind))):
+        eigenvalues_sum += eigenvalues[eigen_sorted_ind[i]]
+        if eigenvalues_sum >= e:
+            chosen_eigenvectors = eigenvectors[:, eigen_sorted_ind[i + 1:]]
+            break
+
+    print("Console: PCA applied on MNIST dataset.")
+    return chosen_eigenvectors
+
+
+def get_image_rotated(img, angle):
+    if angle == 0:
+        return img
+
+    (h, w) = img.shape[:2]
+    (cX, cY) = (w // 2, h // 2)
+
+    M = cv2.getRotationMatrix2D((cX, cY), -angle, 1.0)
+
+    cos = np.abs(M[0, 0])
+    sin = np.abs(M[0, 1])
+
+    nW = int((h * sin) + (w * cos))
+    nH = int((h * cos) + (w * sin))
+
+    M[0, 2] += (nW / 2) - cX
+    M[1, 2] += (nH / 2) - cY
+
+    return cv2.warpAffine(img, M, (nW, nH))
+
+
 def convert_labels(labels):
     labels_converted = []
 
@@ -187,18 +232,16 @@ def recognize_sudoku(img, warped, model, bounding_box=None, motion=False):
             (_, y_left), _ = bounding_boxes.pop(0)
         else:
             (_, y_left), _ = bounding_box
+            motion = True
             sudoku_array -= 1
     except IndexError:
         sudoku_array -= 1
 
     samples, non_zero_counts = get_samples_from_bounding_boxes(img, bounding_boxes, y_left)
-    non_zero_threshold = 50
 
     if np.sum(sudoku_array) != 0 or len(samples) > 81:
         sudoku_array = np.zeros((9, 9, 3), dtype=np.uint8)
-
         samples, non_zero_counts = get_samples_from_warped(warped, motion)
-        non_zero_threshold = 100 if np.mean(non_zero_counts) < 500 else 500
 
     samples = np.reshape(samples, (-1, 28, 28, 1))
 
@@ -217,51 +260,4 @@ def recognize_sudoku(img, warped, model, bounding_box=None, motion=False):
         sudoku_array[int(i / 9), i % 9] = predictions
 
     return sudoku_array
-
-
-# # PCA on MNIST dataset, this function should return PCA transformation for mnist dataset.
-# def apply_pca(X, e):
-#     print("Console: Applying PCA on MNIST dataset..")
-#     chosen_eigenvectors = None
-#
-#     # Subtract mean
-#     X = (X - np.mean(X, axis=0))
-#
-#     eigenvalues, eigenvectors = np.linalg.eig(np.dot(X.T, X))  # Covariance Matrix
-#     eigenvalues /= eigenvalues.sum()  # Normalization
-#
-#     eigen_sorted_ind = eigenvalues.argsort()
-#     eigenvalues_sum = 0.
-#
-#     for i in reversed(range(len(eigen_sorted_ind))):
-#         eigenvalues_sum += eigenvalues[eigen_sorted_ind[i]]
-#         if eigenvalues_sum >= e:
-#             chosen_eigenvectors = eigenvectors[:, eigen_sorted_ind[i + 1:]]
-#             break
-#
-#     print("Console: PCA applied on MNIST dataset.")
-#     return chosen_eigenvectors
-#
-#
-# def get_image_rotated(img, angle):
-#     if angle == 0:
-#         return img
-#
-#     (h, w) = img.shape[:2]
-#     (cX, cY) = (w // 2, h // 2)
-#
-#     M = cv2.getRotationMatrix2D((cX, cY), -angle, 1.0)
-#
-#     cos = np.abs(M[0, 0])
-#     sin = np.abs(M[0, 1])
-#
-#     nW = int((h * sin) + (w * cos))
-#     nH = int((h * cos) + (w * sin))
-#
-#     M[0, 2] += (nW / 2) - cX
-#     M[1, 2] += (nH / 2) - cY
-#
-#     return cv2.warpAffine(img, M, (nW, nH))
-#
-#
 
