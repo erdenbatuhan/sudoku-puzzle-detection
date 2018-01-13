@@ -2,6 +2,30 @@
 
 
 import itertools
+import numpy as np
+
+
+def solve(sudoku_array):
+    actual = sudoku_array[:, :, 0].copy()
+
+    for m in range(len(sudoku_array[0][0])):
+        for i in range(len(sudoku_array)):
+            for j in range(len(sudoku_array[0])):
+                for k in range(len(sudoku_array[0][0])):
+                    actual[i, j] = int(sudoku_array[i, j, k])
+
+                    if actual[i, j] != 0:
+                        try:
+                            solver = SudokuSolver(actual)
+                            solver.solve()
+
+                            return solver.solution, True
+                        except ValueError:
+                            pass
+
+                actual[i, j] = int(sudoku_array[i, j, m])
+
+    return sudoku_array[:, :, 0], False
 
 
 class Clue:
@@ -21,12 +45,15 @@ class Clue:
 
 
 class SudokuSolver:
-
+    
     def __init__(self, sudoku, diagonal=False):
+        sudoku = [[int(j) for j in i] for i in sudoku]
+        
         self._n = len(sudoku)
         for row in sudoku:
             if len(row) != self._n:
                 raise ValueError("The sudoku is missing some values.")
+        
         # Basics.
         self._line = range(self._n)
         self._matrix = [[i // self._n, i % self._n] for i in range(self._n ** 2)]
@@ -169,7 +196,7 @@ class SudokuSolver:
 
     @property
     def solution(self):
-        return self._x
+        return np.array(self._x).reshape((9, 9))
 
     @staticmethod
     def format(x):

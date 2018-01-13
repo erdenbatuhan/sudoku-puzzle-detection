@@ -15,6 +15,49 @@ def convert_labels(labels):
     return labels_converted
 
 
+def detect_sudokus_with_motion(img, e=0.02):
+    max_areas, max_pers, max_contours, max_approxes = [0, 0], [0, 0], [[], []], [[], []]
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+    threshold = cv2.adaptiveThreshold(blur, 255, 1, 1, 51, 1)
+
+    _, contours, _ = cv2.findContours(threshold, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+
+    if len(contours) != 0:
+        for contour in contours:
+            x, y, w, h = cv2.boundingRect(contour)
+            r = w / h
+
+            for i in range(2):
+                if cv2.arcLength(contour, True) >= max_pers[i] and cv2.contourArea(contour) >= max_areas[i] and \
+                                        0.75 < r < 1.25:
+                    max_pers[i] = cv2.arcLength(contour, True)
+                    max_areas[i] = cv2.contourArea(contour)
+                    max_contours[i] = contour
+                    max_approxes[i] = cv2.approxPolyDP(contour, e * max_pers[i], True)
+                    break
+
+    bounding_boxes = []
+
+    for i in range(2):
+        x, y, w, h = cv2.boundingRect(max_contours[i])
+        x_left, y_left, x_right, y_right = x, y, x + w, y + h
+
+        bounding_boxes.append([(x_left, y_left), (x_right, y_right)])
+
+    if len(bounding_boxes) == 2:
+        a, b = max_areas[0], max_areas[1]
+        similarity = a / b if a < b else b / a
+    else:
+        similarity = 1
+
+    if similarity < 0.90:
+        bounding_boxes = bounding_boxes[:1]
+
+    return bounding_boxes, max_approxes
+
+
 def detect_sudoku(img):
     sudoku_detector = SudokuDetector(img)
     sudoku_frame, sudoku_rectangles, max_approx, found = sudoku_detector.get_sudoku_from_image()
@@ -48,7 +91,7 @@ def push_black_image(samples, non_zero_counts):
     non_zero_counts.append(0)
 
 
-def get_samples_from_bounding_boxes(img, bounding_boxes, y_left, motion):
+def get_samples_from_bounding_boxes(img, bounding_boxes, y_left):
     samples = []
     non_zero_counts = []
 
@@ -95,7 +138,7 @@ def get_samples_from_bounding_boxes(img, bounding_boxes, y_left, motion):
 
 def get_samples_from_warped(warped, motion):
     params = {
-        "blurSize": 1 if motion else 5,
+        "blurSize": 3 if motion else 5,
         "blockSize": 51 if motion else 11
     }
 
@@ -120,11 +163,7 @@ def get_samples_from_warped(warped, motion):
             gray = cv2.cvtColor(box, cv2.COLOR_BGR2GRAY)
             blur = cv2.medianBlur(gray, params["blurSize"])
             threshold = cv2.adaptiveThreshold(blur, 255, 0, 1, params["blockSize"], 7)
-
-            if not motion:
-                digit = cv2.morphologyEx(threshold, cv2.MORPH_OPEN, (5, 5))
-            else:
-                digit = cv2.erode(threshold, np.ones((3, 3), np.uint8), iterations=1)
+            digit = cv2.morphologyEx(threshold, cv2.MORPH_OPEN, (5, 5))
 
             # Count non-zero pixels in order to decide the content
             non_zero_counts.append(cv2.countNonZero(digit))
@@ -137,18 +176,22 @@ def get_samples_from_warped(warped, motion):
     return samples, non_zero_counts
 
 
-def recognize_sudoku(img, warped, model, motion=False):
+def recognize_sudoku(img, warped, model, bounding_box=None, motion=False):
     sudoku_array = np.zeros((9, 9, 3), dtype=np.uint8)
     bounding_boxes, y_left = [], 0.
 
     # First bounding box belongs to the sudoku frame while other bounding boxes belong to the sudoku cells
     try:
-        bounding_boxes, _ = detect_sudoku(img)
-        (_, y_left), _ = bounding_boxes.pop(0)
+        if bounding_box is None:
+            bounding_boxes, _ = detect_sudoku(img)
+            (_, y_left), _ = bounding_boxes.pop(0)
+        else:
+            (_, y_left), _ = bounding_box
+            sudoku_array -= 1
     except IndexError:
         sudoku_array -= 1
 
-    samples, non_zero_counts = get_samples_from_bounding_boxes(img, bounding_boxes, y_left, motion)
+    samples, non_zero_counts = get_samples_from_bounding_boxes(img, bounding_boxes, y_left)
     non_zero_threshold = 50
 
     if np.sum(sudoku_array) != 0 or len(samples) > 81:
@@ -221,28 +264,4 @@ def recognize_sudoku(img, warped, model, motion=False):
 #     return cv2.warpAffine(img, M, (nW, nH))
 #
 #
-# def directly_detec_sudoku(img):
-#     # variables for the biggest detected contour expected to be Sudoku
-#     maxContour, maxArea, maxPer = [], 0, 0
-#
-#     # smallFrame -> Grayscale -> Blur -> Threshold
-#     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-#     blur = cv2.GaussianBlur(gray, (5, 5), 0)
-#     threshold = cv2.adaptiveThreshold(blur, 255, 1, 1, 51, 1)
-#     cntOutIm, cnt, hierarchy = cv2.findContours(threshold, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-#
-#     if cnt != []:
-#         for a in cnt:
-#             x, y, w, h = cv2.boundingRect(a)
-#             if (cv2.arcLength(a, True) >= maxPer and w / h > 0.75 and w / h < 1.25 and cv2.contourArea(a) >= maxArea):
-#                 maxPer = cv2.arcLength(a, True)
-#                 maxContour = a
-#                 maxArea = cv2.contourArea(a)
-#
-#     maxX, maxY, maxW, maxH = cv2.boundingRect(maxContour)
-#     topLeftx, topLefty, botRightx, botRighty = maxX, maxY, maxX + maxW, maxY + maxH
-#     boundingBox = [(topLeftx, topLefty), (botRightx, botRighty)]
-#     approx = cv2.approxPolyDP(maxContour, 0.02 * maxPer, True)
-#     maxContour = approx
-#     return boundingBox, maxContour
 

@@ -7,7 +7,7 @@ import glob
 import cv2
 import os
 import SudokuRecognizer
-from SudokuSolver import SudokuSolver
+import SudokuSolver
 from mnist_web import mnist
 
 import keras
@@ -15,6 +15,12 @@ from keras.preprocessing import image
 from keras.models import Sequential, load_model, save_model
 from keras.layers import Dense, Dropout, Flatten
 from keras.layers import Conv2D, MaxPooling2D
+
+
+# ------------------------------------ IMPORTANT ------------------------------------
+# The file 'model.h5' should be present in the project directory.
+# If it's not present, the training of a new model takes at least an hour.
+# It should be present though. It will be submitted to LMS with it.
 
 
 # Set dataset paths before start. For example: '/Home/sudoku_dataset-master'
@@ -28,9 +34,31 @@ DATA_DIRS = SUDOKU_DATASET_DIR + "/images/image*.dat"
 IS_VIDEO = False  # Make IS_VIDEO False if you want to loop over all images instead of looping over all videos
 
 
+def get_image_rotated(img, angle):
+    if angle == 0:
+        return img
+
+    (h, w) = img.shape[:2]
+    (cX, cY) = (w // 2, h // 2)
+
+    img_to_rotate = img.copy()
+    M = cv2.getRotationMatrix2D((cX, cY), -angle, 1.0)
+
+    cos = np.abs(M[0, 0])
+    sin = np.abs(M[0, 1])
+
+    nW = int((h * sin) + (w * cos))
+    nH = int((h * cos) + (w * sin))
+
+    M[0, 2] += (nW / 2) - cX
+    M[1, 2] += (nH / 2) - cY
+
+    return cv2.warpAffine(img_to_rotate, M, (nW, nH))
+
+
 def augment_mnist(images, labels):
     t0 = time.time()
-    print("Console: Augmenting the MNIST dataset, this will take approx. 20 seconds..")
+    print("Console: Augmenting the MNIST dataset, this will take no more than 45 seconds..")
 
     augmented_images = []
     augmented_labels = []
@@ -38,14 +66,25 @@ def augment_mnist(images, labels):
     for image, label in zip(images, labels):
         if label == 0:
             # Black Image
-            augmented_images.append(np.zeros(image.shape, dtype=np.float))
-            augmented_labels.append(label)
+            for _ in range(4):
+                augmented_images.append(np.zeros(image.shape, dtype=np.float))
+                augmented_labels.append(label)
         else:
             image_2D = np.reshape(image, (28, 28, 1))
 
             # Actual Image
-            augmented_images.append(image)
+            augmented_images.append(image)  # Shape is already (784, )
             augmented_labels.append(label)
+
+            # Blur
+            blur = cv2.medianBlur(image_2D, 5)
+            augmented_images.append(blur.reshape((784, )))
+            augmented_labels.append(label)
+
+            # Rotated (90, 180, 270)
+            for angle in range(90, 360, 90):
+                augmented_images.append(get_image_rotated(image_2D, angle).reshape((784, )))
+                augmented_labels.append(label)
 
             # Random Rotation
             augmented_images.append(keras.preprocessing.image.random_rotation(image_2D, 20, row_axis=0, col_axis=1,
@@ -55,6 +94,11 @@ def augment_mnist(images, labels):
             # Random Shift
             augmented_images.append(keras.preprocessing.image.random_shift(image_2D, 0.2, 0.2, row_axis=0, col_axis=1,
                                                                            channel_axis=2).reshape((784, )))
+            augmented_labels.append(label)
+
+            # Random Zoom
+            augmented_images.append(keras.preprocessing.image.random_zoom(image_2D, (0.9, 0.9), row_axis=0, col_axis=1,
+                                                                          channel_axis=2).reshape((784, )))
             augmented_labels.append(label)
 
     print("Console: MNIST dataset is augmented ({} images and {} labels) and took {:.2f} seconds.".
@@ -136,18 +180,24 @@ def warp(img, bounding_boxes=None, max_approx=None):
         return warped, max_approx, rect, dst, False
 
 
-def get_digit_box(digit, shape, color):
+def get_digit_box(digit, shape, color, motion):
+    params = {
+        "fontScale": 0.625 if motion else 1,
+        "thickness": 1 if motion else 2,
+        "frameSize": lambda box_shape: int(box_shape / 14) if motion else int(box_shape / 28)
+    }
+
     digit_box = np.zeros((shape[0], shape[1], 3), dtype=np.float) + 255
-    frame_size = int(digit_box.shape[0] / 28)
+    frame_size = params["frameSize"](digit_box.shape[0])
 
     digit_box[frame_size:digit_box.shape[0] - frame_size, frame_size:digit_box.shape[1] - frame_size] = 0
     cv2.putText(digit_box, str(digit), (int(digit_box.shape[0] / 2.6), int(digit_box.shape[1] / 1.6)),
-                cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
+                cv2.FONT_HERSHEY_SIMPLEX, params["fontScale"], color, params["thickness"])
 
     return digit_box
 
 
-def draw_sudoku(img, sudoku_array, original_digits):
+def draw_sudoku(img, sudoku_array, original_digits, motion=False):
     h, w, _ = img.shape
     dy, dx = h / 9, w / 9
 
@@ -159,7 +209,7 @@ def draw_sudoku(img, sudoku_array, original_digits):
             box_shape = img[int(y): int(y + dy), int(x): int(x + dx)].shape
             color = (255, 255, 255) if original_digits[i, j] else (0, 255, 0)
 
-            digit_box = get_digit_box(sudoku_array[i, j], box_shape, color)
+            digit_box = get_digit_box(sudoku_array[i, j], box_shape, color, motion)
             img[int(y): int(y + dy), int(x): int(x + dx)] = digit_box
 
     return img
@@ -199,33 +249,45 @@ def main():
     if IS_VIDEO:  # Loop over all videos
         for video_dir in glob.glob(VIDEO_DIRS):
             video = cv2.VideoCapture(video_dir)
-            warped = None
+
+            sudoku_array, original_digits = np.zeros((9, 9, 3), dtype=np.uint8), np.ones((9, 9), dtype=np.bool)
+            prev_warped, prev_max_approx, prev_rect, prev_dst, prev_is_warped = None, [], [], [], False
 
             while video.isOpened():
                 ret, frame = video.read()
 
                 if ret:
                     try:
-                        warped, max_approx, rect, dst, is_warped = warp(frame)
+                        bounding_boxes, max_approxes = SudokuRecognizer.detect_sudokus_with_motion(frame)
 
-                        if is_warped:
-                            try:
-                                sudoku_array = SudokuRecognizer.recognize_sudoku(frame, warped, model)
-                            except ValueError:  # The case where sudoku cannot be found in the image
-                                sudoku_array = np.zeros((9, 9, 3), dtype=np.uint8)
-                                print("Console: No sudoku found.")
+                        for bounding_box, max_approx in zip(bounding_boxes, max_approxes):
+                            # (x_left, y_left), (x_right, y_right) = bounding_box
+                            # cv2.rectangle(frame, (x_left, y_left), (x_right, y_right), color=(0, 0, 255), thickness=2)
 
-                            sudoku_array = sudoku_array[:, :, 0]  # Get only the very first predictions
-                            original_digits = sudoku_array != 0
+                            warped, max_approx, rect, dst, is_warped = warp(frame, bounding_box, max_approx)
 
-                            print(sudoku_array)
-                            draw_sudoku(warped, sudoku_array, original_digits)
+                            if is_warped:
+                                try:
+                                    sudoku_array = SudokuRecognizer.recognize_sudoku(frame, warped, model, bounding_box)
+                                except ValueError:  # The case where sudoku cannot be found in the image
+                                    sudoku_array = np.zeros((9, 9, 3), dtype=np.uint8)
+                                    print("Console: No sudoku found.")
 
-                            frame = inv_warp(frame, warped, max_approx, rect, dst)
+                                sudoku_array = sudoku_array[:, :, 0]  # Get only the very first predictions
+                                original_digits = sudoku_array != 0
+
+                                print(sudoku_array)
+                                draw_sudoku(warped, sudoku_array, original_digits, True)
+
+                                frame = inv_warp(frame, warped, max_approx, rect, dst)
+                                prev_warped, prev_max_approx, prev_rect, prev_dst, prev_is_warped = \
+                                    warped, max_approx, rect, dst, is_warped
                     except Exception:
                         pass
 
                     cv2.imshow("frame", frame)
+                    # Uncomment this to see every frame one by one
+                    # cv2.waitKey(0)
                 if (cv2.waitKey(30) & 0xFF == ord("q")) or not ret:
                     break
 
@@ -237,7 +299,6 @@ def main():
 
         print("Console: Testing accuracy on Sudoku dataset, this might take a while..")
         for img_dir, data_dir in zip(glob.glob(IMAGE_DIRS), glob.glob(DATA_DIRS)):
-            try:
                 name, img, data = os.path.basename(img_dir), cv2.imread(img_dir), \
                                   np.genfromtxt(data_dir, skip_header=2, dtype=int, delimiter=' ')
 
@@ -248,7 +309,6 @@ def main():
                 # cv2.waitKey()
 
                 warped, max_approx, rect, dst, is_warped = warp(img)
-                cv2.imshow("warped_sudoku", warped)
 
                 if is_warped:
                     try:
@@ -257,24 +317,21 @@ def main():
                         sudoku_array = np.zeros((9, 9, 3), dtype=np.uint8)
                         print("Console: No sudoku found in " + name + ".")
 
-                    sudoku_array = sudoku_array[:, :, 0]  # Get only the very first predictions
-                    original_digits = sudoku_array != 0
+                    original_digits = sudoku_array[:, :, 0] != 0
+                    sudoku_solution, is_solved = SudokuSolver.solve(sudoku_array)
 
-                    print(sudoku_array)
-                    draw_sudoku(warped, sudoku_array, original_digits)
-
+                    draw_sudoku(warped, sudoku_solution, original_digits)
                     img = inv_warp(img, warped, max_approx, rect, dst)
-                    cv2.imshow("inv_warped_sudoku", img)
 
                     # Evaluate result for current image
-                    detection_accuracy_array = data == sudoku_array
+                    detection_accuracy_array = data == sudoku_array[:, :, 0]
                     acc_percentage = np.sum(detection_accuracy_array) / detection_accuracy_array.size
                     cumulative_accuracy = cumulative_accuracy + acc_percentage
 
                     print("Console: " + name + " accuracy : " + str(acc_percentage * 100) + "%")
-                    cv2.waitKey(0)
-            except Exception:
-                pass
+
+                    cv2.imshow("solution", img)
+                    cv2.waitKey()
 
         # Average accuracy over all images in the dataset
         average_accuracy = cumulative_accuracy / num_images
