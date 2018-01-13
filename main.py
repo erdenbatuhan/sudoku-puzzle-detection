@@ -334,8 +334,8 @@ def main():
 
                     print("Console: " + name + " accuracy : " + str(acc_percentage * 100) + "%")
 
-                    cv2.imshow("Sudoku Solution", img)
-                    cv2.waitKey()
+                    # cv2.imshow("Sudoku Solution", img)
+                    # cv2.waitKey()
             except Exception:
                 pass
 
